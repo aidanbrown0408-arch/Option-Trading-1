@@ -6,17 +6,27 @@ spreads) across a **watchlist of tickers**, progressing from research →
 backtest → paper trading → live trading.
 
 ## 2. Scope (v1)
-- Watchlist-driven scanning: evaluate each ticker on a schedule (e.g. daily/hourly).
-- Directional signal generation (technical + optional fundamental/IV filters).
-- Trade construction: choose expiration, strike, and structure (long option vs.
-  debit spread) based on signal strength, IV rank, and cost.
+- **Short-term only:** weekly (7–10 DTE) and bi-weekly (14–17 DTE) expirations —
+  no 30–45 DTE "standard" tier (dropped from the original plan).
+- Watchlist-driven scanning: evaluate each ticker once per day at/after close.
+- Signal generation from trend (daily/weekly EMA), momentum (RSI, MACD,
+  Bollinger Bands), and volatility (IV rank/percentile, expected move, event
+  calendar) — see `docs/strategy-rules.md` for the full spec.
+- Trade construction: strategy is selected from a trend/momentum × IV-regime
+  matrix, covering both **long-premium** structures (debit spreads, long
+  straddles/strangles) and **short-premium/defined-risk** structures (credit
+  spreads, iron condors, short strangles).
 - Risk management: position sizing, max loss per trade, max portfolio risk,
-  stop-loss / profit-target rules, max concurrent positions.
+  profit-target / stop-loss / 21-DTE-or-50%-profit management rule, max
+  concurrent positions.
 - Execution via broker API in **paper mode** first, live mode gated behind a flag.
 - Logging, trade journal, and performance reporting.
 
-Out of scope for v1: multi-leg volatility strategies (straddles/condors),
-assignment/exercise handling for short legs, multi-account support.
+Out of scope for v1: assignment/exercise handling for short legs that go
+in-the-money (positions must be closed before that risk materializes —
+enforced by the DTE/management rules, not by assignment handling), covered
+calls/cash-secured puts against an existing equity position (needs an equity
+position manager execution doesn't have yet), multi-account support.
 
 ## 3. Phases
 1. **Requirements & strategy spec** (this doc + `docs/strategy-rules.md`)

@@ -1,119 +1,123 @@
-# Strategy Rules v1 — Directional Trend Options
+# Strategy Rules v1 — Weekly / Bi-Weekly Options
 
 Watchlist: `AAPL, MSFT, GOOGL, AMZN, META, TSLA, SPY, QQQ`
+Expiration cycle: **weekly (7–10 DTE) or bi-weekly (14–17 DTE) only.**
 
-These rules are written to be directly codeable and backtestable. Every
-threshold below is a starting hypothesis, not a final answer — the backtester
-(phase 3) is what validates or kills each one.
+This replaces the earlier "Standard tier" (30–45 DTE) approach — v1 is
+short-term only. Every threshold below is a starting hypothesis, not a final
+answer; the backtester is what validates or kills each one. This doc is
+written to be directly codeable: each step below maps to a function in
+`signals/` or `execution/`.
 
-## 1. Signal (per ticker, evaluated once per day at/after close)
-Bullish setup — all must hold:
-- Price > 50-day SMA > 200-day SMA (uptrend + trend alignment).
-- 14-day RSI between 45 and 70 (momentum present, not overbought).
-- Price made a new 10-day high within the last 3 sessions (trigger).
+A few honest notes up front: weekly/bi-weekly options are high-gamma,
+fast-decaying instruments — small misreads in timing or IV compress returns
+quickly. The volatility and event-calendar checks (§3) matter as much as the
+chart pattern (§1–2). Backtest through at least one low-IV period and one
+surprise-gap event before sizing this up.
 
-Bearish setup — mirror image (Price < 50 SMA < 200 SMA, RSI 30–55, new 10-day
-low within 3 sessions).
+## 1. Trend context (per ticker, evaluated once per day at/after close)
+- **Daily trend:** 20 EMA and 50 EMA slope + price position relative to both.
+  Classified as `uptrend` / `downtrend` / `range-bound`.
+- **Weekly trend (confirmation):** same read on the weekly chart. If daily and
+  weekly disagree, classify as `range-bound` (ambiguous) rather than forcing a
+  direction — don't fight the higher timeframe.
+- **Key levels within the expiration window:** most recent swing high/low,
+  round numbers, and a VWAP anchor (e.g. anchored VWAP from the last swing
+  point). These become the candidate strike levels in §5.
 
-No trade if neither setup is met, or if both a bullish and bearish condition
-partially trigger (ambiguous).
+## 2. Momentum & mean-reversion signals
+- **RSI(14):** flag overbought (>70) / oversold (<30) / diverging from price
+  (price makes new high/low, RSI doesn't confirm).
+- **MACD(12,26,9):** crossover direction and whether the histogram is
+  expanding or contracting.
+- **Bollinger Bands (20, 2σ):** is price riding a band (momentum — trend
+  continuation setup) or tagging a band edge and reverting (mean-reversion
+  setup)? This distinction feeds directly into §4's strategy selection.
+- **Volume vs. 20-day average:** confirming (≥1.2× avg on the trigger day) or
+  diverging (move on light volume — lower conviction).
 
-### 1a. Signal strength tier (determines expiration — see §3)
-A setup that meets the base criteria above is **Standard** tier by default.
-It is upgraded to **Fast** tier only if, in addition, ALL of the following hold:
-- The breakout is a new **20-day** high/low (not just 10-day) within the last
-  2 sessions — a stronger, more decisive move.
-- Volume on the trigger day ≥ 1.5× the 20-day average volume (conviction behind
-  the move).
-- RSI has accelerated: today's RSI is at least 5 points higher than 3 sessions
-  ago (bullish) / 5 points lower (bearish) — momentum is building, not stalling.
+## 3. Volatility read (evaluated per ticker before any trade)
+- **IV Rank / IV Percentile** (30–90 day lookback) for the underlying.
+  - IV Rank/Percentile ≥ 50 → **high IV** regime.
+  - IV Rank/Percentile < 50 → **low IV** regime.
+- **Expected move** for the target expiration: read straight from the
+  at-the-money straddle price on that expiration's chain.
+- **Event calendar check:** earnings date, and (for SPY/QQQ) FOMC/CPI/NFP
+  dates falling inside the expiration window.
+  - Default v1 rule: **skip new entries within 5 trading days of a scheduled
+    earnings date**, *unless* the setup is explicitly an earnings-IV-crush
+    premium-selling trade (§4) sized and flagged as such — never treat an
+    earnings-window trade as a normal directional trade.
 
-Fast tier is meant for short-fuse, high-conviction moves; Standard tier is the
-default slower trend-following case. A setup that fails any Fast-tier
-condition simply trades as Standard — it is never rejected for failing to
-upgrade.
+## 4. Strategy selection (trend/momentum read × volatility regime)
+| Setup | Structure | Notes |
+|---|---|---|
+| High IV + range-bound / mean-reversion (price at BB edge) | **Iron condor** or **short strangle** | Short strikes placed outside the expected move, at technical support/resistance from §1. |
+| High IV + directional bias (clear trend, momentum confirming) | **Credit spread** (bull put spread in uptrend / bear call spread in downtrend) | Sold outside the expected move. |
+| Low IV + strong directional signal (trend + momentum aligned, riding BB) | **Debit spread** (call or put) | Aligned with trend direction; caps cost vs. a naked long option. |
+| Low IV + anticipated breakout ahead of a flagged catalyst | **Long straddle/strangle** | Only when a specific catalyst is inside the expiration window (§3) — not a default state. |
+| Existing stock position | **Covered call** (at resistance) or **cash-secured put** (at support) | Only applies if/when the bot manages an underlying equity position — out of scope until execution module supports it. |
 
-## 2. Volatility filter
-- Compute IV rank (current IV vs. 1-year range) for the underlying.
-- Only enter **long options** (calls/puts) if IV rank < 40 (cheaper premium,
-  avoid buying into a vol crush).
-- If IV rank ≥ 40, switch structure to a **debit spread** (buy ATM/near-ATM,
-  sell further OTM same expiration) to reduce vega/theta exposure — same
-  directional bet, capped cost.
+No trade if the volatility regime and trend/momentum read don't map cleanly
+to a row above (e.g. high IV with no clear range or trend read) — skip
+rather than force a structure.
 
-## 3. Trade construction
-Expiration and strikes depend on the signal tier from §1a. Both tiers still
-go through the same IV-rank filter (§2) and the same position sizing / spread
-filter below.
+## 5. Strike & risk parameters
+- **Short strike placement** (condor/strangle/credit spread): outside the
+  expected move (§3), at a technical level with confluence from §1 (e.g.
+  prior swing level ≈ 1 standard deviation away).
+- **Short strike delta target:** 0.15–0.25 for defined-risk premium selling.
+- **Debit spread / long option delta:** long leg 0.60–0.70, short leg (if
+  spread) 0.25–0.30 — deliberately less ITM-heavy than a pure directional
+  long since these are the shorter (7–17 DTE) expirations from the top of
+  this doc, not the old 30–45 DTE tier.
+- **Max risk per trade:** 1–2% of account equity (net debit, or max loss on
+  a defined-risk credit structure).
+- **Liquidity filter:** skip the trade if bid/ask spread on any leg is wider
+  than 10% of the mid price — weekly chains are often thinner than monthlies.
 
-**Standard tier (default — 30–45 DTE):**
-- Expiration: 30–45 DTE at entry — enough time for the thesis to play out,
-  decay still manageable.
-- Strike (long option leg): delta ~0.60–0.70 (in-the-money-ish, behaves more
-  like stock, less theta-sensitive than ATM/OTM).
-- Debit spread short leg: delta ~0.25–0.30 on the same expiration.
+## 6. Trade management
+- **Profit target:** close at 50% of max credit received (credit structures)
+  or 50% of premium paid (debit structures / long premium).
+- **Stop-loss / adjustment trigger:** close or adjust if the underlying
+  breaches the short strike, or loss reaches 2× credit received (credit
+  structures); close debit structures at −40% of premium paid.
+- **DTE exit rule:** close or adjust at **21 DTE or 50% of max profit,
+  whichever comes first** — for the bi-weekly cycle this is close to the
+  midpoint of the trade's life; for the weekly cycle this effectively means
+  managing well before expiration week gamma risk sets in. For structures
+  entered at 7–10 DTE, treat this as **50% of max profit or 3 DTE**, whichever
+  comes first, since 21 DTE isn't reachable.
+- **Trend/momentum reversal exit:** close early if the §1/§2 read that
+  justified entry flips (e.g. price closes back through the 20 EMA against
+  the trade direction, or MACD crosses against the position).
+- **Expiration handling:** close, don't let anything expire in-the-money
+  untested — no assignment/exercise handling exists yet (see scope note
+  below).
 
-**Fast tier (7–14 DTE, weekly/bi-weekly):**
-- Expiration: nearest weekly or bi-weekly expiration with **at least 7 DTE**
-  at entry (never enter with <7 DTE — too little room for error).
-- Strike (long option leg): delta ~0.75–0.85 (deeper ITM than Standard tier —
-  short-dated options need to behave more like stock to survive the faster
-  theta decay).
-- Debit spread short leg: delta ~0.35–0.40 on the same expiration.
-- Fast tier is skipped entirely if IV rank ≥ 40 and no liquid weekly/bi-weekly
-  spread can be built with acceptable bid/ask width — in that case, fall back
-  to Standard tier rather than force a bad fill.
+## 7. Post-trade log (per `journal/`)
+Record per trade: entry date, structure, strike(s), credit/debit received or
+paid, IV rank at entry, expected move at entry, exit date, P/L, exit reason
+(profit target / stop / DTE rule / reversal / manual), and whether the
+technical thesis (§1–2) actually played out — this last field is qualitative
+but essential for pattern review over time, not just P/L.
 
-**Both tiers:**
-- Position size: risk (premium paid, or net debit) capped at 1–2% of account
-  equity per trade (see risk defaults in PLANNING.md §6).
-- Skip the trade if the bid/ask spread on the chosen contract is wider than
-  10% of the mid price (execution quality filter) — this filter is stricter
-  in practice for Fast tier, since weekly chains are often thinner.
+## 8. Scope note vs. PLANNING.md
+This version adds premium-selling structures (iron condor, short strangle,
+credit spreads) that weren't in the original v1 scope (PLANNING.md §2, which
+listed "long calls/puts, debit spreads" only and explicitly excluded
+multi-leg volatility strategies and short-leg assignment handling). Before
+building execution/risk logic for short legs, PLANNING.md needs a matching
+update — flagged as a next step, not yet done.
 
-## 4. Exit rules (checked daily; whichever hits first)
-
-**Standard tier:**
-- **Profit target:** close at +75% of the premium paid (long option) or +60%
-  of max profit (debit spread).
-- **Stop loss:** close at −40% of premium paid.
-- **Time stop:** close at 10 DTE regardless of P&L (avoid late-cycle theta decay).
-- **Thesis invalidation:** close if price closes back below the 50-day SMA
-  (bullish trade) / above the 50-day SMA (bearish trade) — the trend that
-  justified the entry is gone.
-
-**Fast tier:**
-- **Profit target:** close at +50% of the premium paid (long option) or +45%
-  of max profit (debit spread) — take the win sooner, theta is working harder
-  against you.
-- **Stop loss:** close at −35% of premium paid (tighter than Standard —
-  less time for a thesis to recover).
-- **Time stop:** close at 3 DTE regardless of P&L (weekly/bi-weekly gamma
-  risk near expiration is severe).
-- **Thesis invalidation:** same rule as Standard (50-day SMA break).
-
-## 5. Portfolio-level constraints
-- Max 1 open position per ticker at a time (no pyramiding in v1).
-- Max concurrent positions across the whole watchlist: 5.
-- No new entries if the account is down >5% for the day (circuit breaker).
-
-## 6. What the backtester needs to measure
-- Per-rule contribution: win rate/expectancy with the IV filter on vs. off,
-  with the trend filter on vs. off — so we know which rules are load-bearing.
-- Per-ticker performance (tech names vs. SPY/QQQ may behave very differently).
-- Sensitivity to the profit target / stop loss / DTE thresholds (a simple
-  parameter sweep) before locking in v1 defaults.
-
-## 7. Open questions to revisit after first backtest results
-- Should SPY/QQQ (index/ETF, lower realized vol) use different thresholds
-  than single-name tech stocks?
-- Is the 45-day-max DTE window wide enough given earnings dates? (Earnings
-  handling — trade through vs. avoid — is not yet specified; default for v1
-  is to **skip new entries within 5 trading days of a scheduled earnings
-  date** to avoid IV-crush risk until this is explicitly backtested.) This
-  applies to both tiers, but matters most for Fast tier — a 7–14 DTE trade
-  has almost no room to absorb an earnings-driven IV crush.
-- Does the Fast-tier upgrade (§1a) actually add expectancy, or does the
-  tighter stop/faster time-stop just cut winners short? This is exactly the
-  kind of question the backtester should answer by running Standard-only vs.
-  Standard+Fast side by side.
+## 9. What the backtester needs to measure
+- Per-structure expectancy (condor vs. credit spread vs. debit spread vs.
+  straddle) — which structures actually earn their complexity.
+- Per-ticker performance (tech names vs. SPY/QQQ may behave very differently
+  in a weekly-options context — SPY/QQQ likely favor premium-selling given
+  typically lower realized vol; single names may favor debit spreads around
+  idiosyncratic moves).
+- Sensitivity of the 21-DTE/50%-profit management rule vs. simpler fixed
+  profit targets.
+- Explicit low-IV-period and gap-event stress tests, per the note in the
+  intro — don't size this up on backtest results alone until both are run.
