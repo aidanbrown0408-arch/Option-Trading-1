@@ -47,6 +47,19 @@ def summarize(result: BacktestResult) -> dict:
         for tk, p in by_ticker.items()
     }
 
+    # Exit-reason breakdown: diagnoses *why* trades lose. If most losses are
+    # "stop_loss", entries are moving against us quickly (signal quality
+    # problem). If most losses are "dte_exit", the thesis needed more time
+    # than the 7-10 DTE window gave it (time-budget problem) -- these point
+    # to different fixes.
+    by_reason = {}
+    for t in trades:
+        by_reason.setdefault(t.exit_reason, []).append(t.pnl)
+    reason_summary = {
+        r: {"num_trades": len(p), "win_rate": float(np.mean(np.array(p) > 0)), "total_pnl": float(np.sum(p))}
+        for r, p in by_reason.items()
+    }
+
     return {
         "num_trades": len(trades),
         "win_rate": float(win_rate),
@@ -59,6 +72,7 @@ def summarize(result: BacktestResult) -> dict:
         "max_drawdown_pct": float(max_drawdown * 100),
         "by_structure": structure_summary,
         "by_ticker": ticker_summary,
+        "by_exit_reason": reason_summary,
     }
 
 
@@ -86,3 +100,7 @@ def print_report(result: BacktestResult) -> None:
     print("\n--- By ticker ---")
     for tk, d in s["by_ticker"].items():
         print(f"{tk:6s} n={d['num_trades']:4d}  total_pnl=${d['total_pnl']:.2f}")
+
+    print("\n--- By exit reason ---")
+    for reason, d in s["by_exit_reason"].items():
+        print(f"{reason:15s} n={d['num_trades']:4d}  win_rate={d['win_rate']:.1%}  total_pnl=${d['total_pnl']:.2f}")

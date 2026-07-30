@@ -10,28 +10,35 @@ backtest → paper trading → live trading.
   not %-of-equity — see §6 and `docs/strategy-rules.md` §5.
 - **Short-term only:** weekly (7–10 DTE) and bi-weekly (14–17 DTE) expirations —
   no 30–45 DTE "standard" tier (dropped from the original plan).
-- **Directional long premium only: long calls, long puts, and debit spreads.**
-  Premium-selling (credit spreads, iron condor) and long-vol catalyst plays
-  (straddle/strangle) were tried and dropped — they needed real historical
-  options IV we don't have, and a real-data backtest showed the straddle
-  result was dominated by an unvalidated IV-markup assumption, not real edge.
+- **Structures: long call, long put, debit put spread, credit spreads (bull
+  put/bear call), iron condor.** Long straddle was tried and dropped for
+  cause — a real-data backtest showed 94% of its P&L came from a 68.6% win
+  rate that traced back to an unvalidated IV-markup assumption, not real
+  edge. Credit spreads/iron condor share the same IV-proxy risk in
+  principle but were never individually proven wrong, so they're in scope —
+  still flagged, not fully trusted (see `docs/strategy-rules.md`).
+  `debit_spread_call` was also dropped: confirmed worst-performing structure
+  on both real and synthetic data.
 - Watchlist-driven scanning: evaluate each ticker once per day at/after close.
-- Signal generation from trend (daily/weekly EMA), momentum (RSI, MACD,
-  Bollinger Bands), and volatility (IV rank/percentile) — see
-  `docs/strategy-rules.md` for the full spec.
-- Trade construction: strategy selected from a trend/momentum × IV-regime
-  matrix — long call/put in the low-IV regime, debit spread in the high-IV
-  regime.
-- Risk management: target-cost position sizing, profit-target/stop-loss/
-  DTE-exit rules, max concurrent positions, daily loss circuit breaker.
+- Signal generation from trend (daily/weekly EMA + breakout confirmation),
+  momentum (RSI, MACD, Bollinger Bands), volume, and volatility (IV rank/
+  percentile) — see `docs/strategy-rules.md` for the full spec.
+- Trade construction: strategy selected from a trend/momentum/breakout ×
+  IV-regime matrix.
+- Risk management: target-cost position sizing (checked against actual
+  spendable cash, not just total account value), profit-target/stop-loss/
+  DTE-exit rules (separate thresholds for long-premium vs. credit
+  structures), max concurrent positions, daily loss circuit breaker. Any
+  structure whose backtested win rate falls below 20% gets dropped from the
+  selection matrix once there's a statistically meaningful sample.
 - Execution via broker API in **paper mode** first, live mode gated behind a flag.
 - Logging, trade journal, and performance reporting.
 
-Out of scope for v1: any short-premium/defined-risk structure (credit
-spreads, iron condor, covered calls, cash-secured puts — the last two also
-need an equity-position manager execution doesn't have), long-vol catalyst
-plays (straddle/strangle), assignment/exercise handling (not needed for pure
-long options), multi-account support.
+Out of scope for v1: covered calls/cash-secured puts (need an
+equity-position manager execution doesn't have), long-vol catalyst plays
+(straddle/strangle — proven pricing artifact), assignment/exercise handling
+for short legs (positions are closed before that risk materializes, not
+handled via assignment), multi-account support.
 
 ## 3. Phases
 1. **Requirements & strategy spec** (this doc + `docs/strategy-rules.md`)

@@ -1,7 +1,16 @@
 import numpy as np
 import pandas as pd
 
-from signals.indicators import bollinger_bands, ema, macd, rsi, volume_ratio, realized_vol
+from signals.indicators import (
+    bollinger_bands,
+    ema,
+    macd,
+    made_new_high,
+    made_new_low,
+    realized_vol,
+    rsi,
+    volume_ratio,
+)
 
 
 def _rising_series(n=100, start=100.0, step=0.5):
@@ -50,3 +59,25 @@ def test_realized_vol_zero_for_flat_price():
     flat = pd.Series([100.0] * 30)
     rv = realized_vol(flat)
     assert rv.dropna().abs().max() < 1e-9
+
+
+def test_made_new_high_true_on_fresh_breakout():
+    s = pd.Series([100.0] * 9 + [110.0])  # today is a clean new 10-day high
+    assert made_new_high(s, lookback=10, within_last=3) is True
+
+
+def test_made_new_high_false_if_high_is_stale():
+    # the high was set 5 sessions ago, price has since drifted down -- not
+    # a fresh breakout even though it's technically still the 10-day high
+    s = pd.Series([100.0, 110.0, 105.0, 104.0, 103.0, 102.0])
+    assert made_new_high(s, lookback=6, within_last=3) is False
+
+
+def test_made_new_high_false_with_insufficient_history():
+    s = pd.Series([100.0, 101.0])
+    assert made_new_high(s, lookback=10, within_last=3) is False
+
+
+def test_made_new_low_true_on_fresh_breakdown():
+    s = pd.Series([100.0] * 9 + [90.0])
+    assert made_new_low(s, lookback=10, within_last=3) is True

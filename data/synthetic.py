@@ -7,10 +7,21 @@ and network access to Alpaca outside this sandbox.
 """
 from __future__ import annotations
 
+import zlib
+
 import numpy as np
 import pandas as pd
 
 from data.provider import DataProvider, realized_vol_iv_rank_proxy
+
+
+def _stable_hash(s: str) -> int:
+    """Python's builtin hash() is randomized per-process (PYTHONHASHSEED),
+    so two separate runs would silently generate different synthetic price
+    paths for the same ticker -- this makes cross-run comparisons (e.g. a
+    before/after parameter sweep) invalid without anyone noticing. crc32 is
+    stable across processes."""
+    return zlib.crc32(s.encode())
 
 
 class SyntheticDataProvider(DataProvider):
@@ -21,7 +32,7 @@ class SyntheticDataProvider(DataProvider):
     def _generate(self, ticker: str, start: str, end: str) -> pd.DataFrame:
         dates = pd.bdate_range(start, end)
         n = len(dates)
-        rng = np.random.default_rng(abs(hash(ticker)) % (2**32) ^ 42)
+        rng = np.random.default_rng(_stable_hash(ticker) ^ 42)
 
         # Regime-switching drift/vol so trend + range-bound + high/low IV
         # periods all show up in the backtest, rather than pure random walk.
@@ -65,7 +76,7 @@ class SyntheticDataProvider(DataProvider):
     def is_earnings_window(self, ticker: str, date: pd.Timestamp, window_days: int = 5) -> bool:
         # Deterministic pseudo-quarterly earnings: one ~63-trading-day cycle,
         # offset per ticker so tickers don't all report the same week.
-        offset = abs(hash(ticker)) % 63
+        offset = _stable_hash(ticker) % 63
         trading_day = (date - pd.Timestamp("2022-01-03")).days
         cycle_pos = (trading_day + offset) % 63
         return cycle_pos < window_days

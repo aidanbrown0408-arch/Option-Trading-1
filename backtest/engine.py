@@ -11,7 +11,7 @@ from typing import Optional
 import pandas as pd
 
 from data.provider import DataProvider
-from execution.constructor import TradeCandidate, build_trade
+from execution.constructor import CREDIT_STRUCTURES, TradeCandidate, build_trade
 from execution.options_pricing import structure_value
 from risk.manager import PortfolioState, approve_trade
 from signals.engine import NO_TRADE, build_signal_read, select_structure
@@ -21,6 +21,7 @@ TARGET_DTE_DAYS = 10  # mid-point of the 7-10 DTE weekly window (strategy-rules.
 RISK_FREE_RATE = 0.045
 PROFIT_TARGET_PCT = 0.50
 DEBIT_STOP_PCT = 0.40
+CREDIT_STOP_MULT = 2.0  # strategy-rules.md §6: stop when loss reaches 2x credit received
 DTE_EXIT_DAYS = 3
 
 
@@ -68,11 +69,24 @@ def _check_exit(pos: OpenPosition, current_date: pd.Timestamp, mark: float,
                  underlying: float, trend_now: str) -> Optional[str]:
     dte_remaining = (pos.expiry_date - current_date).days
 
-    pnl_pct = (mark - pos.candidate.entry_cost) / abs(pos.candidate.entry_cost)
-    if pnl_pct >= PROFIT_TARGET_PCT:
-        return "profit_target"
-    if pnl_pct <= -DEBIT_STOP_PCT:
-        return "stop_loss"
+    if pos.structure in CREDIT_STRUCTURES:
+        # entry_cost is negative (net credit received); mark is the current
+        # net value of the same position (also typically negative -- what
+        # you'd have to pay to close it). strategy-rules.md §6: profit
+        # target = 50% of max credit captured; stop = loss reaches 2x credit.
+        credit = -pos.candidate.entry_cost
+        cost_to_close = -mark
+        profit_captured = credit - cost_to_close
+        if profit_captured >= PROFIT_TARGET_PCT * pos.candidate.max_profit:
+            return "profit_target"
+        if cost_to_close >= CREDIT_STOP_MULT * credit:
+            return "stop_loss"
+    else:
+        pnl_pct = (mark - pos.candidate.entry_cost) / abs(pos.candidate.entry_cost)
+        if pnl_pct >= PROFIT_TARGET_PCT:
+            return "profit_target"
+        if pnl_pct <= -DEBIT_STOP_PCT:
+            return "stop_loss"
 
     if dte_remaining <= DTE_EXIT_DAYS:
         return "dte_exit"
@@ -103,7 +117,7 @@ def run_backtest(
     equity_curve = []
 
     for date in dates:
-        portfolio.start_of_day_equity = portfolio.equity
+        portfolio.start_of_day_equity = portfolio.total_equity()
 
         for ticker in list(open_positions.keys()):
             pos = open_positions[ticker]
@@ -125,7 +139,10 @@ def run_backtest(
 
             if reason:
                 pnl = (mark - pos.candidate.entry_cost) * pos.contracts * 100
-                portfolio.equity += pnl
+                # cash was already debited by entry_cost at open time, so
+                # credit back the current mark value (proceeds of closing),
+                # not just the pnl -- see risk/manager.py module docstring.
+                portfolio.equity += mark * pos.contracts * 100
                 trades.append(ClosedTrade(
                     ticker=ticker, structure=pos.structure, entry_date=pos.entry_date,
                     exit_date=date, contracts=pos.contracts, pnl=pnl, exit_reason=reason,
@@ -168,6 +185,7 @@ def run_backtest(
             if contracts <= 0:
                 continue
 
+            portfolio.equity -= candidate.entry_cost * contracts * 100  # debit premium paid
             open_positions[ticker] = OpenPosition(
                 ticker=ticker, structure=structure, entry_date=date, expiry_date=expiry_date,
                 entry_underlying=underlying, entry_sigma=sigma, candidate=candidate,
@@ -177,7 +195,7 @@ def run_backtest(
                 print(f"OPEN  {ticker:6s} {date.date()} {structure:18s} "
                       f"cost=${candidate.max_loss * 100:8.2f} contracts={contracts}")
 
-        equity_curve.append((date, portfolio.equity))
+        equity_curve.append((date, portfolio.total_equity()))
 
     curve = pd.Series({d: e for d, e in equity_curve}).sort_index()
     return BacktestResult(equity_curve=curve, trades=trades)

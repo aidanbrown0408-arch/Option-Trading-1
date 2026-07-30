@@ -48,3 +48,26 @@ def realized_vol(close: pd.Series, period: int = 20, annualize: bool = True) -> 
     if annualize:
         vol = vol * np.sqrt(252)
     return vol
+
+
+def made_new_high(close: pd.Series, lookback: int = 10, within_last: int = 3) -> bool:
+    """True if the latest close is a new `lookback`-day high, and that high
+    was set within the last `within_last` sessions (not stale/faded).
+    Originally speced in strategy-rules.md §1 ("new 10-day high... trigger")
+    but never wired into select_structure() until now -- an extra
+    confirmation gate to raise entry quality."""
+    if len(close) < lookback:
+        return False
+    window = close.tail(lookback)
+    high_idx = window.values.argmax()
+    sessions_since_high = len(window) - 1 - high_idx
+    return bool(close.iloc[-1] >= window.max() and sessions_since_high < within_last)
+
+
+def made_new_low(close: pd.Series, lookback: int = 10, within_last: int = 3) -> bool:
+    if len(close) < lookback:
+        return False
+    window = close.tail(lookback)
+    low_idx = window.values.argmin()
+    sessions_since_low = len(window) - 1 - low_idx
+    return bool(close.iloc[-1] <= window.min() and sessions_since_low < within_last)

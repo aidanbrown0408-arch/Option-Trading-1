@@ -11,7 +11,7 @@ from typing import Optional
 
 import pandas as pd
 
-from signals.indicators import bollinger_bands, ema, macd, rsi, volume_ratio
+from signals.indicators import bollinger_bands, ema, macd, made_new_high, made_new_low, rsi, volume_ratio
 
 TREND_UP = "uptrend"
 TREND_DOWN = "downtrend"
@@ -35,6 +35,8 @@ class SignalRead:
     volume_ratio: float
     iv_regime: str  # "high" | "low"
     iv_rank: float
+    breakout_up: bool
+    breakout_down: bool
 
 
 def classify_trend(close: pd.Series) -> str:
@@ -112,33 +114,63 @@ def build_signal_read(
         volume_ratio=float(vol_ratio) if pd.notna(vol_ratio) else 0.0,
         iv_regime=iv_regime,
         iv_rank=iv_rank,
+        breakout_up=made_new_high(close),
+        breakout_down=made_new_low(close),
     )
 
 
 # --- §4 strategy selection matrix -------------------------------------------------
-# Directional only: long calls, long puts, and debit spreads. No premium-selling
-# (credit spreads/iron condor) or long-vol catalyst plays (straddle) -- dropped
-# per scope decision, since those needed IV/earnings data we can't validate
-# (see docs/strategy-rules.md and PLANNING.md history).
+# Long calls/puts, debit spread put, credit spreads, and iron condor.
+# long_straddle stays excluded -- it was PROVEN to be a pricing artifact (a
+# real-data run showed 94% of total P&L / 68.6% win rate from our realized-
+# vol IV proxy underpricing straddles ahead of real historical earnings
+# jumps). Credit spreads/iron condor share the same IV-proxy risk in
+# principle but were never shown to be wrong the same way, so they're back
+# in -- still flagged, not fully trusted. debit_spread_call stays excluded
+# (confirmed worst performer on both real and synthetic data).
 
 LONG_CALL = "long_call"
 LONG_PUT = "long_put"
-DEBIT_SPREAD_CALL = "debit_spread_call"
 DEBIT_SPREAD_PUT = "debit_spread_put"
+CREDIT_SPREAD_BULL_PUT = "credit_spread_bull_put"
+CREDIT_SPREAD_BEAR_CALL = "credit_spread_bear_call"
+IRON_CONDOR = "iron_condor"
 NO_TRADE = None
+
+
+MIN_VOLUME_RATIO = 1.2  # strategy-rules.md §2: "confirming (>=1.2x avg)" -- was
+                         # computed but never actually enforced until now.
 
 
 def select_structure(read: SignalRead) -> Optional[str]:
     """Maps a SignalRead to a structure per strategy-rules.md §4.
-    No trade unless trend + momentum clearly confirm a direction; the
-    Bollinger Band check avoids buying calls right at the top of a band
-    (mean-reversion risk) or puts right at the bottom."""
+    No trade unless trend + momentum + volume + a genuine breakout all
+    confirm a direction; the Bollinger Band check avoids buying calls right
+    at the top of a band (mean-reversion risk) or puts right at the bottom.
+    Range-bound + high IV + price at a band edge is a separate mean-
+    reversion setup (iron condor), not a directional one.
 
-    momentum_confirms_up = read.macd_hist > 0 and read.macd_rising and read.rsi >= 45
-    momentum_confirms_down = read.macd_hist < 0 and not read.macd_rising and read.rsi <= 55
+    Thresholds here (RSI >=/<=50, min volume ratio, breakout confirmation)
+    are deliberately strict: at 0.12-delta OTM long options, a losing trade
+    is expected to be the common case (delta ~= probability of profit), so
+    the only lever to raise win rate without also raising cost/contract is
+    fewer, higher-conviction entries. Trades less often than earlier looser
+    versions -- that's the intended tradeoff, not a bug.
+    """
 
-    if read.trend == TREND_UP and momentum_confirms_up and read.bb_position != BB_LOWER:
-        return LONG_CALL if read.iv_regime == "low" else DEBIT_SPREAD_CALL
-    if read.trend == TREND_DOWN and momentum_confirms_down and read.bb_position != BB_UPPER:
+    volume_confirms = read.volume_ratio >= MIN_VOLUME_RATIO
+    momentum_confirms_up = read.macd_hist > 0 and read.macd_rising and read.rsi >= 50
+    momentum_confirms_down = read.macd_hist < 0 and not read.macd_rising and read.rsi <= 50
+
+    if (read.trend == TREND_UP and momentum_confirms_up and volume_confirms
+            and read.breakout_up and read.bb_position != BB_LOWER):
+        return LONG_CALL if read.iv_regime == "low" else CREDIT_SPREAD_BULL_PUT
+    if (read.trend == TREND_DOWN and momentum_confirms_down and volume_confirms
+            and read.breakout_down and read.bb_position != BB_UPPER):
         return LONG_PUT if read.iv_regime == "low" else DEBIT_SPREAD_PUT
+
+    if (read.trend == TREND_RANGE and read.iv_regime == "high"
+            and read.bb_position in (BB_UPPER, BB_LOWER)):
+        return IRON_CONDOR
+
     return NO_TRADE
