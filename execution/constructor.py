@@ -2,9 +2,19 @@
 
 Directional only: long call, long put, debit call spread, debit put spread.
 
-Delta targets:
-  - Long call/put: single leg, 0.65 delta.
-  - Debit spread: long leg 0.65 delta, short leg 0.28 delta.
+Delta targets are deliberately low (deep OTM) to fit a $2,500 account's
+~$70-150/trade budget across $150-600+/share underlyings -- at the original
+0.65 "behaves like stock" delta, a single contract on any of these tickers
+costs $500-1900 (confirmed empirically: every trade was rejected). Delta is
+roughly the probability of finishing in-the-money, so this is a real
+tradeoff, not just a tuning knob: these are low-probability, high-payoff-if-
+right trades, not the higher-win-rate "stock substitute" the original spec
+assumed. See docs/strategy-rules.md §5.
+
+  - Long call/put: single leg, 0.12 delta.
+  - Debit spread: long leg 0.20 delta, short leg 0.10 delta (narrow width
+    keeps cost down -- a wider, higher-delta spread reprices back into the
+    $300-800+ range on the pricier names).
 """
 from __future__ import annotations
 
@@ -13,8 +23,9 @@ from dataclasses import dataclass
 from execution.options_pricing import CALL, PUT, Leg, strike_for_delta, structure_value
 from signals.engine import DEBIT_SPREAD_CALL, DEBIT_SPREAD_PUT, LONG_CALL, LONG_PUT
 
-LONG_DELTA = 0.65
-SHORT_DELTA = 0.28
+LONG_OPTION_DELTA = 0.12
+DEBIT_SPREAD_LONG_DELTA = 0.20
+DEBIT_SPREAD_SHORT_DELTA = 0.10
 
 
 @dataclass
@@ -27,8 +38,8 @@ class TradeCandidate:
 
 
 def _debit_spread(S: float, T: float, r: float, sigma: float, kind: str) -> list[Leg]:
-    long_k = strike_for_delta(S, T, r, sigma, kind, LONG_DELTA)
-    short_k = strike_for_delta(S, T, r, sigma, kind, SHORT_DELTA)
+    long_k = strike_for_delta(S, T, r, sigma, kind, DEBIT_SPREAD_LONG_DELTA)
+    short_k = strike_for_delta(S, T, r, sigma, kind, DEBIT_SPREAD_SHORT_DELTA)
     return [Leg(kind, +1, long_k), Leg(kind, -1, short_k)]
 
 
@@ -36,9 +47,9 @@ def build_trade(
     structure: str, S: float, T: float, r: float, sigma: float,
 ) -> TradeCandidate:
     if structure == LONG_CALL:
-        legs = [Leg(CALL, +1, strike_for_delta(S, T, r, sigma, CALL, LONG_DELTA))]
+        legs = [Leg(CALL, +1, strike_for_delta(S, T, r, sigma, CALL, LONG_OPTION_DELTA))]
     elif structure == LONG_PUT:
-        legs = [Leg(PUT, +1, strike_for_delta(S, T, r, sigma, PUT, LONG_DELTA))]
+        legs = [Leg(PUT, +1, strike_for_delta(S, T, r, sigma, PUT, LONG_OPTION_DELTA))]
     elif structure == DEBIT_SPREAD_CALL:
         legs = _debit_spread(S, T, r, sigma, CALL)
     elif structure == DEBIT_SPREAD_PUT:

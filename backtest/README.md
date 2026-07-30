@@ -25,9 +25,12 @@ Scope history worth knowing before trusting any number this prints:
   `docs/strategy-rules.md`.
 - Position sizing changed from %-of-equity to a target-cost model (~$70-150
   per trade) once the account size was set to $2,500 — see `risk/manager.py`
-  and PLANNING.md §6. This structurally excludes higher-priced names
-  (TSLA, MSFT, often SPY/QQQ) from trading at all, confirmed empirically and
-  left as-is by choice.
+  and PLANNING.md §6. At the original 0.65 delta this excluded every ticker
+  entirely (a real run produced zero trades — every contract cost $500+).
+  Delta targets were dropped to 0.12 (long call/put) and 0.20/0.10 (debit
+  spread) to fit the budget — see `docs/strategy-rules.md` §5 for the
+  resulting win-rate/risk-profile tradeoff (deep OTM = lower probability of
+  profit, bigger payoff when right).
 - No transaction-cost model exists yet: every fill is at the theoretical
   Black-Scholes mid, with zero slippage/commissions. Real weekly-options
   spreads are often 5-15% wide, so real returns will be lower than shown

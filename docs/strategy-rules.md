@@ -59,21 +59,31 @@ bug to route around.
 | Anything else (range-bound, momentum disagrees, or price at the BB edge against the trade) | **No trade** |
 
 ## 5. Strike & risk parameters
-- **Long call/put delta:** 0.65 (in-the-money-ish, less theta-sensitive than
-  ATM/OTM, behaves more like the stock).
-- **Debit spread:** long leg 0.65 delta, short leg 0.28 delta.
+- **Long call/put delta:** 0.12 (deep OTM). **Debit spread:** long leg 0.20
+  delta, short leg 0.10 delta (narrow width to keep cost down).
+  - **This is a real tradeoff, not just a tuning knob.** The original spec
+    used 0.65 delta ("behaves like the stock," less theta-sensitive, higher
+    probability of profit). At 0.65 delta, a single 7-10 DTE contract on any
+    of these 8 tickers (all $150-600+/share) costs $500-1900 — confirmed
+    empirically when a real-data backtest run produced **zero trades**
+    because every candidate exceeded the $200 affordability cap below.
+    Dropping to 0.12/0.20-0.10 delta was the fix that makes trades
+    affordable on a $2,500 account, but delta is roughly the probability of
+    finishing in-the-money — these are now **low-probability,
+    high-payoff-if-right** trades, not the higher-win-rate "stock
+    substitute" originally designed. Expect a lower win rate than earlier
+    backtests showed; the strategy now depends on a smaller number of big
+    winners covering more frequent small losses.
 - **Position sizing — target cost, not %-of-equity:** at $2,500, the
   standard "1-2% of equity per trade" rule ($25-50) is smaller than a single
-  contract typically costs, which would reject almost every trade. Instead,
-  target a **total position cost of roughly $70-150 per trade** (doesn't
-  need to land exactly in that range) by choosing contract count; reject the
-  trade outright if even 1 contract costs more than ~$200 (see
-  `risk/manager.py`).
-  - **Consequence, not a bug:** at these delta targets, higher-priced names
-    (TSLA, MSFT, and often SPY/QQQ) frequently cost more than $200 for even
-    1 contract and will simply not trade until the account is bigger. This
-    was confirmed empirically in a backtest run and left as-is by choice —
-    see §8.
+  contract typically costs even at these lower deltas. Instead, target a
+  **total position cost of roughly $70-150 per trade** (doesn't need to land
+  exactly in that range) by choosing contract count; reject the trade
+  outright if even 1 contract costs more than ~$200 (see `risk/manager.py`).
+  - At 0.12/0.20-0.10 delta, all 8 watchlist tickers now land roughly in the
+    $50-200/contract range even at current (elevated, 2026) prices — so
+    unlike the 0.65-delta version, no ticker is structurally excluded
+    anymore. Confirm this still holds when you rerun; prices move.
 - **Liquidity filter (not yet enforced in the backtester):** skip the trade
   if bid/ask spread on any leg is wider than 10% of the mid price — weekly
   chains are often thinner than monthlies. The current backtest prices
