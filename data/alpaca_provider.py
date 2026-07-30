@@ -36,9 +36,12 @@ class AlpacaDataProvider(DataProvider):
         )
         bars = self._client.get_stock_bars(req).df
         bars = bars.xs(ticker, level=0) if ticker in bars.index.get_level_values(0) else bars
-        return bars.rename(columns={
-            "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume",
-        })[["open", "high", "low", "close", "volume"]]
+        bars = bars[["open", "high", "low", "close", "volume"]]
+        # Alpaca returns tz-aware (UTC) timestamps; the rest of the engine
+        # (synthetic provider, backtest date range) is tz-naive, so strip tz
+        # and normalize to the date to keep index lookups comparable.
+        bars.index = bars.index.tz_convert("UTC").tz_localize(None).normalize()
+        return bars
 
     def get_iv_rank(self, ticker: str, date: pd.Timestamp) -> float:
         # TODO: derive from Alpaca Options Market Data API (chain IV history)
