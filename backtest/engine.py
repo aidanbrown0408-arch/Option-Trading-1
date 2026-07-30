@@ -24,6 +24,15 @@ DEBIT_STOP_PCT = 0.40
 CREDIT_STOP_MULT = 2.0
 DTE_EXIT_DAYS = 3
 
+# Our IV proxy is trailing realized vol (data/provider.py), which is
+# backward-looking and blind to the real IV run-up markets price in ahead of
+# earnings. Without this markup, straddle entries get priced as if IV were
+# still calm right before a real historical earnings jump, understating cost
+# and manufacturing an unrealistic edge. 1.6x is a rough placeholder for
+# "typical" earnings IV expansion, not a fitted number — revisit once real
+# historical options IV is available.
+EARNINGS_IV_MARKUP = 1.6
+
 
 @dataclass
 class OpenPosition:
@@ -170,6 +179,8 @@ def run_backtest(
 
             underlying = float(daily["close"].iloc[-1])
             sigma = _current_sigma(daily)
+            if structure == LONG_STRADDLE:
+                sigma *= EARNINGS_IV_MARKUP
             expiry_date = date + timedelta(days=TARGET_DTE_DAYS)
             T = TARGET_DTE_DAYS / 365.0
 
