@@ -89,12 +89,16 @@ def run_backtest(
     start: str,
     end: str,
     starting_equity: float = 100_000.0,
+    verbose: bool = False,
 ) -> BacktestResult:
     all_daily = {t: provider.get_daily_bars(t, "2022-01-01", end) for t in tickers}
     dates = pd.bdate_range(start, end)
 
     portfolio = PortfolioState(equity=starting_equity, start_of_day_equity=starting_equity)
-    open_positions: dict[str, OpenPosition] = {}
+    # portfolio.open_positions IS the position dict (not a separate copy) --
+    # approve_trade()'s "already have a position" / "max concurrent" checks
+    # read this dict, so it must be the same one the loop below mutates.
+    open_positions: dict[str, OpenPosition] = portfolio.open_positions
     trades: list[ClosedTrade] = []
     equity_curve = []
 
@@ -126,6 +130,9 @@ def run_backtest(
                     ticker=ticker, structure=pos.structure, entry_date=pos.entry_date,
                     exit_date=date, contracts=pos.contracts, pnl=pnl, exit_reason=reason,
                 ))
+                if verbose:
+                    print(f"CLOSE {ticker:6s} {date.date()} {pos.structure:18s} "
+                          f"reason={reason:15s} pnl=${pnl:8.2f}")
                 del open_positions[ticker]
 
         for ticker in tickers:
@@ -166,6 +173,9 @@ def run_backtest(
                 entry_underlying=underlying, entry_sigma=sigma, candidate=candidate,
                 contracts=contracts, entry_trend=read.trend,
             )
+            if verbose:
+                print(f"OPEN  {ticker:6s} {date.date()} {structure:18s} "
+                      f"cost=${candidate.max_loss * 100:8.2f} contracts={contracts}")
 
         equity_curve.append((date, portfolio.equity))
 

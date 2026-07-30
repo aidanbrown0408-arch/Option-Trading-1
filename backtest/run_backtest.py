@@ -28,6 +28,8 @@ def main():
     parser.add_argument("--end", default="2026-06-30")
     parser.add_argument("--source", default="synthetic", choices=["synthetic", "alpaca"])
     parser.add_argument("--equity", type=float, default=2_500.0)
+    parser.add_argument("--verbose", action="store_true",
+                         help="print every OPEN/CLOSE event as it happens")
     args = parser.parse_args()
 
     if args.source == "alpaca":
@@ -37,7 +39,7 @@ def main():
         provider = SyntheticDataProvider()
 
     tickers = load_watchlist()
-    result = run_backtest(tickers, provider, args.start, args.end, args.equity)
+    result = run_backtest(tickers, provider, args.start, args.end, args.equity, verbose=args.verbose)
     print_report(result)
 
 
