@@ -7,6 +7,7 @@ caveat: Alpaca's OPRA options history only goes back to ~early 2024.
 from __future__ import annotations
 
 import os
+from datetime import date as date_cls, timedelta
 
 import pandas as pd
 
@@ -30,11 +31,21 @@ class AlpacaDataProvider(DataProvider):
         self._earnings_cache: dict[str, pd.DatetimeIndex] = {}
 
     def get_daily_bars(self, ticker: str, start: str, end: str) -> pd.DataFrame:
+        from alpaca.data.enums import DataFeed
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame
 
+        # Free/basic Alpaca plans only have IEX feed access, not the default
+        # SIP feed (SIP raises "subscription does not permit..."). IEX daily
+        # bars are a fine proxy for a signal backtest even if you're on SIP.
+        # Also clamp `end` to today - 1 day: SIP-only restrictions aside, you
+        # can't request data past what actually exists yet.
+        yesterday = (date_cls.today() - timedelta(days=1)).isoformat()
+        end = min(end, yesterday)
+
         req = StockBarsRequest(
             symbol_or_symbols=ticker, timeframe=TimeFrame.Day, start=start, end=end,
+            feed=DataFeed.IEX,
         )
         bars = self._client.get_stock_bars(req).df
         bars = bars.xs(ticker, level=0) if ticker in bars.index.get_level_values(0) else bars
