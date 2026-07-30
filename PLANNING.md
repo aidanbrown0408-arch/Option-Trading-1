@@ -41,15 +41,15 @@ assignment/exercise handling for short legs, multi-account support.
 9. **Monitoring & reporting**
    - Trade log, daily P&L summary, alerting on errors/risk breaches.
 
-## 4. Decisions needed before coding starts
-| Question | Options | Notes |
+## 4. Decisions
+| Question | Decision | Notes |
 |---|---|---|
-| Broker/API | Tastytrade, Interactive Brokers, Alpaca (options), Tradier | Determines auth, order & chain-data APIs available |
-| Historical options data source | CBOE DataShop, ORATS, Polygon.io, broker's own history | Needed for backtesting realistic fills/greeks |
-| Language/runtime | Python (pandas, broker SDKs) recommended | Best library support for options/quant work |
-| Watchlist composition | Fixed list vs. screened dynamically | Start fixed (e.g. 10–20 liquid large-cap/ETF names) |
-| Signal approach | Rules-based (MA/RSI/trend) vs. ML | Start rules-based for v1, explainable & backtestable |
-| Scheduling | Cron/polling vs. event-driven (webhooks/streaming) | Start with scheduled polling, simplest to reason about |
+| Broker/API | **Alpaca** | Paper + live trading, single API for equities and options orders. |
+| Historical options data source | **Alpaca Options Market Data API** (to start) | Same API key as execution, simplest stack. Caveat: Alpaca's OPRA options history only goes back to ~early 2024, so backtests are limited to that window. If we need a longer lookback later, add Polygon.io or ORATS as a second source behind the same data-layer interface — the rest of the system won't need to change. |
+| Language/runtime | **Python** | pandas, alpaca-py SDK, good options/quant library support. |
+| Watchlist | **AAPL, MSFT, GOOGL, AMZN, META, TSLA, SPY, QQQ** | 6 large-cap tech names + 2 broad-market ETFs. All highly liquid options chains, tight spreads — good for directional strategies. |
+| Signal approach | Rules-based (MA/RSI/trend) for v1 | Explainable and backtestable; ML can come later. |
+| Scheduling | Scheduled polling (e.g. daily, or hourly during market hours) | Simplest to reason about and backtest; can move to streaming later. |
 
 ## 5. Proposed architecture
 ```
@@ -79,9 +79,9 @@ broker adapter.
 - Daily loss circuit breaker: halt new entries if daily drawdown exceeds X%.
 
 ## 7. Immediate next steps
-1. Confirm broker + data provider (drives everything downstream) — see §4.
-2. Write `docs/strategy-rules.md` with concrete, codeable entry/exit rules.
+1. ~~Confirm broker + data provider~~ — done, see §4.
+2. Write `docs/strategy-rules.md` with concrete, codeable entry/exit rules. ✅
 3. Scaffold repo structure (`data/`, `signals/`, `execution/`, `risk/`,
-   `backtest/`, `config/`, `tests/`).
+   `backtest/`, `config/`, `tests/`). ✅
 4. Build the backtester first — no live/paper trading until a strategy shows
    a positive expectancy historically.
