@@ -116,38 +116,29 @@ def build_signal_read(
 
 
 # --- §4 strategy selection matrix -------------------------------------------------
+# Directional only: long calls, long puts, and debit spreads. No premium-selling
+# (credit spreads/iron condor) or long-vol catalyst plays (straddle) -- dropped
+# per scope decision, since those needed IV/earnings data we can't validate
+# (see docs/strategy-rules.md and PLANNING.md history).
 
-IRON_CONDOR = "iron_condor"
-CREDIT_SPREAD_BULL_PUT = "credit_spread_bull_put"
-CREDIT_SPREAD_BEAR_CALL = "credit_spread_bear_call"
+LONG_CALL = "long_call"
+LONG_PUT = "long_put"
 DEBIT_SPREAD_CALL = "debit_spread_call"
 DEBIT_SPREAD_PUT = "debit_spread_put"
-LONG_STRADDLE = "long_straddle"
 NO_TRADE = None
 
 
-def select_structure(read: SignalRead, catalyst_flagged: bool) -> Optional[str]:
+def select_structure(read: SignalRead) -> Optional[str]:
     """Maps a SignalRead to a structure per strategy-rules.md §4.
-    Returns None if no row of the matrix cleanly applies."""
+    No trade unless trend + momentum clearly confirm a direction; the
+    Bollinger Band check avoids buying calls right at the top of a band
+    (mean-reversion risk) or puts right at the bottom."""
 
     momentum_confirms_up = read.macd_hist > 0 and read.macd_rising and read.rsi >= 45
     momentum_confirms_down = read.macd_hist < 0 and not read.macd_rising and read.rsi <= 55
 
-    if catalyst_flagged and read.iv_regime == "low":
-        return LONG_STRADDLE
-
-    if read.iv_regime == "high":
-        if read.trend == TREND_RANGE and read.bb_position in (BB_UPPER, BB_LOWER):
-            return IRON_CONDOR
-        if read.trend == TREND_UP and momentum_confirms_up:
-            return CREDIT_SPREAD_BULL_PUT
-        if read.trend == TREND_DOWN and momentum_confirms_down:
-            return CREDIT_SPREAD_BEAR_CALL
-        return NO_TRADE
-
-    # low IV regime
     if read.trend == TREND_UP and momentum_confirms_up and read.bb_position != BB_LOWER:
-        return DEBIT_SPREAD_CALL
+        return LONG_CALL if read.iv_regime == "low" else DEBIT_SPREAD_CALL
     if read.trend == TREND_DOWN and momentum_confirms_down and read.bb_position != BB_UPPER:
-        return DEBIT_SPREAD_PUT
+        return LONG_PUT if read.iv_regime == "low" else DEBIT_SPREAD_PUT
     return NO_TRADE

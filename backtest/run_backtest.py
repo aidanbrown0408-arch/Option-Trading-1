@@ -27,7 +27,7 @@ def main():
     parser.add_argument("--start", default="2023-01-01")
     parser.add_argument("--end", default="2026-06-30")
     parser.add_argument("--source", default="synthetic", choices=["synthetic", "alpaca"])
-    parser.add_argument("--equity", type=float, default=100_000.0)
+    parser.add_argument("--equity", type=float, default=2_500.0)
     args = parser.parse_args()
 
     if args.source == "alpaca":

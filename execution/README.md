@@ -4,7 +4,9 @@ Trade construction (strike/expiry/structure selection) and the broker
 adapter (Alpaca). Same interface for paper and live trading — mode is a
 config flag, not a code fork.
 
-Structures to support per `docs/strategy-rules.md` §4: debit spreads, long
-straddles/strangles, credit spreads, iron condors, short strangles. Iron
-condors are 4-leg orders — the Alpaca adapter needs to place/manage
-multi-leg orders atomically, not as separate single-leg orders.
+Structures to support per `docs/strategy-rules.md` §4: long call, long put,
+debit call spread, debit put spread. All single-name, long-premium-only —
+no multi-leg atomic order handling needed (a debit spread's two legs can be
+placed as a standard vertical spread order type). Premium-selling structures
+(credit spreads, iron condor) and straddles were dropped from scope; see
+PLANNING.md §2 and `backtest/README.md` for why.

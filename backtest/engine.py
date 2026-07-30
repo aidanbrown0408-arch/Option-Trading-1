@@ -14,24 +14,14 @@ from data.provider import DataProvider
 from execution.constructor import TradeCandidate, build_trade
 from execution.options_pricing import structure_value
 from risk.manager import PortfolioState, approve_trade
-from signals.engine import LONG_STRADDLE, NO_TRADE, build_signal_read, select_structure
+from signals.engine import NO_TRADE, build_signal_read, select_structure
 from signals.indicators import realized_vol
 
 TARGET_DTE_DAYS = 10  # mid-point of the 7-10 DTE weekly window (strategy-rules.md §1 intro)
 RISK_FREE_RATE = 0.045
 PROFIT_TARGET_PCT = 0.50
 DEBIT_STOP_PCT = 0.40
-CREDIT_STOP_MULT = 2.0
 DTE_EXIT_DAYS = 3
-
-# Our IV proxy is trailing realized vol (data/provider.py), which is
-# backward-looking and blind to the real IV run-up markets price in ahead of
-# earnings. Without this markup, straddle entries get priced as if IV were
-# still calm right before a real historical earnings jump, understating cost
-# and manufacturing an unrealistic edge. 1.6x is a rough placeholder for
-# "typical" earnings IV expansion, not a fitted number — revisit once real
-# historical options IV is available.
-EARNINGS_IV_MARKUP = 1.6
 
 
 @dataclass
@@ -77,22 +67,12 @@ def _current_sigma(daily: pd.DataFrame) -> float:
 def _check_exit(pos: OpenPosition, current_date: pd.Timestamp, mark: float,
                  underlying: float, trend_now: str) -> Optional[str]:
     dte_remaining = (pos.expiry_date - current_date).days
-    is_debit = pos.candidate.entry_cost > 0
 
-    if is_debit:
-        pnl_pct = (mark - pos.candidate.entry_cost) / abs(pos.candidate.entry_cost)
-        if pnl_pct >= PROFIT_TARGET_PCT:
-            return "profit_target"
-        if pnl_pct <= -DEBIT_STOP_PCT:
-            return "stop_loss"
-    else:
-        credit = -pos.candidate.entry_cost
-        current_credit_owed = -mark  # what it would cost to close now
-        profit_captured = credit - current_credit_owed
-        if profit_captured >= PROFIT_TARGET_PCT * pos.candidate.max_profit:
-            return "profit_target"
-        if current_credit_owed >= CREDIT_STOP_MULT * credit:
-            return "stop_loss"
+    pnl_pct = (mark - pos.candidate.entry_cost) / abs(pos.candidate.entry_cost)
+    if pnl_pct >= PROFIT_TARGET_PCT:
+        return "profit_target"
+    if pnl_pct <= -DEBIT_STOP_PCT:
+        return "stop_loss"
 
     if dte_remaining <= DTE_EXIT_DAYS:
         return "dte_exit"
@@ -140,10 +120,7 @@ def run_backtest(
                 reason = "expired"
 
             if reason:
-                if pos.candidate.entry_cost > 0:
-                    pnl = (mark - pos.candidate.entry_cost) * pos.contracts * 100
-                else:
-                    pnl = (-pos.candidate.entry_cost - (-mark)) * pos.contracts * 100
+                pnl = (mark - pos.candidate.entry_cost) * pos.contracts * 100
                 portfolio.equity += pnl
                 trades.append(ClosedTrade(
                     ticker=ticker, structure=pos.structure, entry_date=pos.entry_date,
@@ -166,21 +143,15 @@ def run_backtest(
             if read is None:
                 continue
 
-            if provider.is_earnings_window(ticker, date) and read.iv_regime == "low":
-                catalyst_flagged = True
-            elif provider.is_earnings_window(ticker, date):
-                continue  # skip: earnings window, not a flagged long-vol setup (strategy-rules.md §3)
-            else:
-                catalyst_flagged = False
+            if provider.is_earnings_window(ticker, date):
+                continue  # skip: avoid IV-crush risk into an earnings date (strategy-rules.md §3)
 
-            structure = select_structure(read, catalyst_flagged)
+            structure = select_structure(read)
             if structure is NO_TRADE:
                 continue
 
             underlying = float(daily["close"].iloc[-1])
             sigma = _current_sigma(daily)
-            if structure == LONG_STRADDLE:
-                sigma *= EARNINGS_IV_MARKUP
             expiry_date = date + timedelta(days=TARGET_DTE_DAYS)
             T = TARGET_DTE_DAYS / 365.0
 

@@ -2,10 +2,10 @@ import numpy as np
 import pandas as pd
 
 from signals.engine import (
-    CREDIT_SPREAD_BULL_PUT,
     DEBIT_SPREAD_CALL,
-    IRON_CONDOR,
-    LONG_STRADDLE,
+    DEBIT_SPREAD_PUT,
+    LONG_CALL,
+    LONG_PUT,
     SignalRead,
     TREND_DOWN,
     TREND_RANGE,
@@ -47,26 +47,38 @@ def _read(**overrides) -> SignalRead:
     return SignalRead(**base)
 
 
-def test_select_structure_low_iv_uptrend_gives_debit_call():
+def test_select_structure_low_iv_uptrend_gives_long_call():
     r = _read()
-    assert select_structure(r, catalyst_flagged=False) == DEBIT_SPREAD_CALL
+    assert select_structure(r) == LONG_CALL
 
 
-def test_select_structure_high_iv_uptrend_gives_credit_spread():
+def test_select_structure_high_iv_uptrend_gives_debit_spread_call():
     r = _read(iv_regime="high")
-    assert select_structure(r, catalyst_flagged=False) == CREDIT_SPREAD_BULL_PUT
+    assert select_structure(r) == DEBIT_SPREAD_CALL
 
 
-def test_select_structure_high_iv_range_bb_edge_gives_condor():
-    r = _read(trend=TREND_RANGE, iv_regime="high", bb_position="upper", macd_hist=0, macd_rising=False)
-    assert select_structure(r, catalyst_flagged=False) == IRON_CONDOR
+def test_select_structure_low_iv_downtrend_gives_long_put():
+    r = _read(trend=TREND_DOWN, daily_trend=TREND_DOWN, weekly_trend=TREND_DOWN,
+              rsi=45, macd_hist=-1.0, macd_rising=False)
+    assert select_structure(r) == LONG_PUT
 
 
-def test_select_structure_catalyst_low_iv_gives_straddle():
-    r = _read(iv_regime="low")
-    assert select_structure(r, catalyst_flagged=True) == LONG_STRADDLE
+def test_select_structure_high_iv_downtrend_gives_debit_spread_put():
+    r = _read(trend=TREND_DOWN, daily_trend=TREND_DOWN, weekly_trend=TREND_DOWN,
+              rsi=45, macd_hist=-1.0, macd_rising=False, iv_regime="high")
+    assert select_structure(r) == DEBIT_SPREAD_PUT
 
 
-def test_select_structure_no_clean_match_returns_none():
-    r = _read(trend=TREND_RANGE, iv_regime="low", bb_position="middle", macd_hist=0, macd_rising=False, rsi=50)
-    assert select_structure(r, catalyst_flagged=False) is None
+def test_select_structure_range_bound_returns_none():
+    r = _read(trend=TREND_RANGE)
+    assert select_structure(r) is None
+
+
+def test_select_structure_no_momentum_confirmation_returns_none():
+    r = _read(macd_hist=-0.1, macd_rising=False)  # trend up but momentum disagrees
+    assert select_structure(r) is None
+
+
+def test_select_structure_bb_edge_blocks_entry():
+    r = _read(bb_position="lower")  # uptrend but price at lower band -> skip call
+    assert select_structure(r) is None

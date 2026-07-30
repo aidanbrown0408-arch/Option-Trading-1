@@ -6,27 +6,32 @@ spreads) across a **watchlist of tickers**, progressing from research →
 backtest → paper trading → live trading.
 
 ## 2. Scope (v1)
+- **Account size: ~$2,500.** Sizing is target-cost-based (~$70-150/trade),
+  not %-of-equity — see §6 and `docs/strategy-rules.md` §5.
 - **Short-term only:** weekly (7–10 DTE) and bi-weekly (14–17 DTE) expirations —
   no 30–45 DTE "standard" tier (dropped from the original plan).
+- **Directional long premium only: long calls, long puts, and debit spreads.**
+  Premium-selling (credit spreads, iron condor) and long-vol catalyst plays
+  (straddle/strangle) were tried and dropped — they needed real historical
+  options IV we don't have, and a real-data backtest showed the straddle
+  result was dominated by an unvalidated IV-markup assumption, not real edge.
 - Watchlist-driven scanning: evaluate each ticker once per day at/after close.
 - Signal generation from trend (daily/weekly EMA), momentum (RSI, MACD,
-  Bollinger Bands), and volatility (IV rank/percentile, expected move, event
-  calendar) — see `docs/strategy-rules.md` for the full spec.
-- Trade construction: strategy is selected from a trend/momentum × IV-regime
-  matrix, covering both **long-premium** structures (debit spreads, long
-  straddles/strangles) and **short-premium/defined-risk** structures (credit
-  spreads, iron condors, short strangles).
-- Risk management: position sizing, max loss per trade, max portfolio risk,
-  profit-target / stop-loss / 21-DTE-or-50%-profit management rule, max
-  concurrent positions.
+  Bollinger Bands), and volatility (IV rank/percentile) — see
+  `docs/strategy-rules.md` for the full spec.
+- Trade construction: strategy selected from a trend/momentum × IV-regime
+  matrix — long call/put in the low-IV regime, debit spread in the high-IV
+  regime.
+- Risk management: target-cost position sizing, profit-target/stop-loss/
+  DTE-exit rules, max concurrent positions, daily loss circuit breaker.
 - Execution via broker API in **paper mode** first, live mode gated behind a flag.
 - Logging, trade journal, and performance reporting.
 
-Out of scope for v1: assignment/exercise handling for short legs that go
-in-the-money (positions must be closed before that risk materializes —
-enforced by the DTE/management rules, not by assignment handling), covered
-calls/cash-secured puts against an existing equity position (needs an equity
-position manager execution doesn't have yet), multi-account support.
+Out of scope for v1: any short-premium/defined-risk structure (credit
+spreads, iron condor, covered calls, cash-secured puts — the last two also
+need an equity-position manager execution doesn't have), long-vol catalyst
+plays (straddle/strangle), assignment/exercise handling (not needed for pure
+long options), multi-account support.
 
 ## 3. Phases
 1. **Requirements & strategy spec** (this doc + `docs/strategy-rules.md`)
@@ -82,11 +87,15 @@ reuse Signal Engine + Trade Constructor + Risk Manager without touching the
 broker adapter.
 
 ## 6. Risk management defaults (tune later)
-- Max risk per trade: 1–2% of account equity.
-- Max concurrent positions: 5–8.
-- Max sector/ticker concentration: e.g. no more than 2 positions per ticker.
-- Hard stop-loss at defined % of premium paid; profit target at defined % gain.
-- Daily loss circuit breaker: halt new entries if daily drawdown exceeds X%.
+- Position sizing targets a total cost of ~$70-150 per trade (not %-of-equity
+  — at $2,500, the usual 1-2% rule is smaller than a single contract often
+  costs). Reject the trade if even 1 contract costs more than ~$200.
+  Consequence: higher-priced names (TSLA, MSFT, often SPY/QQQ) may not trade
+  at all at current delta targets — confirmed in backtest, left as-is.
+- Max concurrent positions: 5.
+- Hard stop-loss at −40% of premium paid; profit target at +50% of premium
+  paid; DTE exit at 3 days remaining.
+- Daily loss circuit breaker: halt new entries if daily drawdown exceeds 5%.
 
 ## 7. Immediate next steps
 1. ~~Confirm broker + data provider~~ — done, see §4.
