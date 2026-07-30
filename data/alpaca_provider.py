@@ -10,7 +10,7 @@ import os
 
 import pandas as pd
 
-from data.provider import DataProvider
+from data.provider import DataProvider, realized_vol_iv_rank_proxy
 
 
 class AlpacaDataProvider(DataProvider):
@@ -26,6 +26,8 @@ class AlpacaDataProvider(DataProvider):
             raise RuntimeError("Set ALPACA_API_KEY / ALPACA_SECRET_KEY env vars")
 
         self._client = StockHistoricalDataClient(api_key, secret_key)
+        self._daily_cache: dict[str, pd.DataFrame] = {}
+        self._earnings_cache: dict[str, pd.DatetimeIndex] = {}
 
     def get_daily_bars(self, ticker: str, start: str, end: str) -> pd.DataFrame:
         from alpaca.data.requests import StockBarsRequest
@@ -43,12 +45,43 @@ class AlpacaDataProvider(DataProvider):
         bars.index = bars.index.tz_convert("UTC").tz_localize(None).normalize()
         return bars
 
+    def _get_full_daily(self, ticker: str) -> pd.DataFrame:
+        # Alpaca's OPRA options history only starts ~early 2024 (PLANNING.md
+        # §4), but equity bars go back much further, so this range is fine
+        # for the realized-vol proxy below even outside the options window.
+        if ticker not in self._daily_cache:
+            self._daily_cache[ticker] = self.get_daily_bars(ticker, "2022-01-01", "2026-12-31")
+        return self._daily_cache[ticker]
+
     def get_iv_rank(self, ticker: str, date: pd.Timestamp) -> float:
-        # TODO: derive from Alpaca Options Market Data API (chain IV history)
-        # once available; not implemented/tested in this sandbox.
-        raise NotImplementedError("IV rank from Alpaca options data not yet implemented")
+        # Alpaca's options data API returns current/live greeks per contract,
+        # not a ready-made 1-year historical IV time series, so a full daily
+        # options-chain replay to build real IV rank isn't practical for a
+        # simple backtest. Same realized-vol-percentile proxy as
+        # SyntheticDataProvider — see realized_vol_iv_rank_proxy's docstring
+        # for why this is an approximation, not real IV.
+        return realized_vol_iv_rank_proxy(self._get_full_daily(ticker), date)
 
     def is_earnings_window(self, ticker: str, date: pd.Timestamp, window_days: int = 5) -> bool:
-        # TODO: source an earnings calendar (Alpaca corporate actions API or
-        # a separate calendar provider) — not implemented/tested here.
-        raise NotImplementedError("Earnings calendar lookup not yet implemented")
+        # Alpaca has no earnings calendar endpoint; using yfinance's (best
+        # effort, not guaranteed complete/accurate). This filter is a v1
+        # heuristic (strategy-rules.md §3), not a hard safety rule, so on any
+        # lookup failure we fail OPEN (assume not near earnings) rather than
+        # block trading entirely if the calendar source is unavailable.
+        try:
+            import yfinance as yf
+        except ImportError:
+            return False
+
+        if ticker not in self._earnings_cache:
+            try:
+                dates = yf.Ticker(ticker).get_earnings_dates(limit=60)
+                idx = pd.to_datetime(dates.index).tz_localize(None) if dates is not None else pd.DatetimeIndex([])
+            except Exception:
+                idx = pd.DatetimeIndex([])
+            self._earnings_cache[ticker] = idx
+
+        earnings_dates = self._earnings_cache[ticker]
+        if len(earnings_dates) == 0:
+            return False
+        return bool((abs((earnings_dates - date).days) <= window_days).any())

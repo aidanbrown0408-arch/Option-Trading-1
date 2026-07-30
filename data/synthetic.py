@@ -10,8 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from data.provider import DataProvider
-from signals.indicators import realized_vol
+from data.provider import DataProvider, realized_vol_iv_rank_proxy
 
 
 class SyntheticDataProvider(DataProvider):
@@ -61,17 +60,7 @@ class SyntheticDataProvider(DataProvider):
         return df.loc[start:end]
 
     def get_iv_rank(self, ticker: str, date: pd.Timestamp) -> float:
-        df = self._get_full(ticker)
-        window = df.loc[:date].tail(252)
-        if len(window) < 40:
-            return 50.0
-        rv = realized_vol(window["close"])
-        current = rv.iloc[-1]
-        history = rv.dropna()
-        if len(history) < 20 or pd.isna(current):
-            return 50.0
-        rank = (history < current).mean() * 100
-        return float(rank)
+        return realized_vol_iv_rank_proxy(self._get_full(ticker), date)
 
     def is_earnings_window(self, ticker: str, date: pd.Timestamp, window_days: int = 5) -> bool:
         # Deterministic pseudo-quarterly earnings: one ~63-trading-day cycle,

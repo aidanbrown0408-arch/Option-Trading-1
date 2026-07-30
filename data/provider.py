@@ -7,6 +7,26 @@ from abc import ABC, abstractmethod
 
 import pandas as pd
 
+from signals.indicators import realized_vol
+
+
+def realized_vol_iv_rank_proxy(daily: pd.DataFrame, date: pd.Timestamp) -> float:
+    """IV rank proxy: percentile rank of current realized vol within its own
+    1-year trailing history. Used when a real historical IV surface isn't
+    available (see execution/options_pricing.py caveat) — real option IV
+    tends to run richer than realized vol and reacts faster to upcoming
+    events, so this under/overstates IV rank around catalysts. Replace with
+    a real IV history source before trusting sizing decisions on it."""
+    window = daily.loc[:date].tail(252)
+    if len(window) < 40:
+        return 50.0
+    rv = realized_vol(window["close"])
+    current = rv.iloc[-1]
+    history = rv.dropna()
+    if len(history) < 20 or pd.isna(current):
+        return 50.0
+    return float((history < current).mean() * 100)
+
 
 class DataProvider(ABC):
     @abstractmethod
