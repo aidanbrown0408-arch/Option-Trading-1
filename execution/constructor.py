@@ -1,8 +1,9 @@
 """Trade construction: structure name -> option legs, per strategy-rules.md §5.
 
-Long call, long put, debit put spread, credit spreads (bull put / bear
-call), iron condor. No long straddle (proven pricing artifact, see
-signals/engine.py) and no debit call spread (confirmed worst performer).
+Exactly 3 structures, per user decision: long call, long put, iron condor.
+Debit/credit spreads dropped for scope (not proven wrong, just cut -- see
+git history if reconsidering); long_straddle stays out (proven pricing
+artifact, see signals/engine.py).
 
 Delta targets for the long-premium side are deliberately low (deep OTM) to
 fit a $2,500 account's ~$70-150/trade budget across $150-600+/share
@@ -14,34 +15,21 @@ low-probability, high-payoff-if-right trades, not the higher-win-rate
 "stock substitute" the original spec assumed. See docs/strategy-rules.md §5.
 
   - Long call/put: single leg, 0.12 delta.
-  - Debit spread: long leg 0.20 delta, short leg 0.10 delta (narrow width
-    keeps cost down -- a wider, higher-delta spread reprices back into the
-    $300-800+ range on the pricier names).
-  - Credit spread / iron condor: short leg 0.20 delta, protective long leg
-    0.10 delta -- these are defined-risk premium-selling structures, sized
-    by max_loss rather than premium paid.
+  - Iron condor: short legs 0.20 delta, protective long legs 0.10 delta --
+    defined-risk premium-selling, sized by max_loss rather than premium paid.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from execution.options_pricing import CALL, PUT, Leg, strike_for_delta, structure_value
-from signals.engine import (
-    CREDIT_SPREAD_BEAR_CALL,
-    CREDIT_SPREAD_BULL_PUT,
-    DEBIT_SPREAD_PUT,
-    IRON_CONDOR,
-    LONG_CALL,
-    LONG_PUT,
-)
+from signals.engine import IRON_CONDOR, LONG_CALL, LONG_PUT
 
 LONG_OPTION_DELTA = 0.12
-DEBIT_SPREAD_LONG_DELTA = 0.20
-DEBIT_SPREAD_SHORT_DELTA = 0.10
 CREDIT_SHORT_DELTA = 0.20
 CREDIT_LONG_DELTA = 0.10
 
-CREDIT_STRUCTURES = (CREDIT_SPREAD_BULL_PUT, CREDIT_SPREAD_BEAR_CALL, IRON_CONDOR)
+CREDIT_STRUCTURES = (IRON_CONDOR,)
 
 
 @dataclass
@@ -51,12 +39,6 @@ class TradeCandidate:
     entry_cost: float  # positive = net debit paid; negative = net credit received
     max_loss: float
     max_profit: float
-
-
-def _debit_spread(S: float, T: float, r: float, sigma: float, kind: str) -> list[Leg]:
-    long_k = strike_for_delta(S, T, r, sigma, kind, DEBIT_SPREAD_LONG_DELTA)
-    short_k = strike_for_delta(S, T, r, sigma, kind, DEBIT_SPREAD_SHORT_DELTA)
-    return [Leg(kind, +1, long_k), Leg(kind, -1, short_k)]
 
 
 def _credit_spread(S: float, T: float, r: float, sigma: float, kind: str) -> list[Leg]:
@@ -72,12 +54,6 @@ def build_trade(
         legs = [Leg(CALL, +1, strike_for_delta(S, T, r, sigma, CALL, LONG_OPTION_DELTA))]
     elif structure == LONG_PUT:
         legs = [Leg(PUT, +1, strike_for_delta(S, T, r, sigma, PUT, LONG_OPTION_DELTA))]
-    elif structure == DEBIT_SPREAD_PUT:
-        legs = _debit_spread(S, T, r, sigma, PUT)
-    elif structure == CREDIT_SPREAD_BULL_PUT:
-        legs = _credit_spread(S, T, r, sigma, PUT)
-    elif structure == CREDIT_SPREAD_BEAR_CALL:
-        legs = _credit_spread(S, T, r, sigma, CALL)
     elif structure == IRON_CONDOR:
         legs = _credit_spread(S, T, r, sigma, PUT) + _credit_spread(S, T, r, sigma, CALL)
     else:
@@ -88,20 +64,11 @@ def build_trade(
     if structure in (LONG_CALL, LONG_PUT):
         max_loss = entry_cost
         max_profit = float("inf")
-    elif structure == DEBIT_SPREAD_PUT:
-        max_loss = entry_cost
-        width = abs(legs[0].strike - legs[1].strike)
-        max_profit = width - entry_cost
-    elif structure == IRON_CONDOR:
+    else:  # iron condor
         credit = -entry_cost
         put_width = abs(legs[0].strike - legs[1].strike)
         call_width = abs(legs[2].strike - legs[3].strike)
         max_loss = max(put_width, call_width) - credit
-        max_profit = credit
-    else:  # credit spread
-        credit = -entry_cost
-        width = abs(legs[0].strike - legs[1].strike)
-        max_loss = width - credit
         max_profit = credit
 
     return TradeCandidate(structure=structure, legs=legs, entry_cost=entry_cost,

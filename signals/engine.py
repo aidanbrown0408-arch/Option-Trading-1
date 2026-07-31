@@ -11,7 +11,16 @@ from typing import Optional
 
 import pandas as pd
 
-from signals.indicators import bollinger_bands, ema, macd, made_new_high, made_new_low, rsi, volume_ratio
+from signals.indicators import (
+    bollinger_bands,
+    ema,
+    macd,
+    made_new_high,
+    made_new_low,
+    rsi,
+    trend_strength,
+    volume_ratio,
+)
 
 TREND_UP = "uptrend"
 TREND_DOWN = "downtrend"
@@ -37,6 +46,8 @@ class SignalRead:
     iv_rank: float
     breakout_up: bool
     breakout_down: bool
+    weekly_rsi: float
+    trend_strength: float  # (EMA20-EMA50)/EMA50 on the daily close
 
 
 def classify_trend(close: pd.Series) -> str:
@@ -101,6 +112,7 @@ def build_signal_read(
     bb_pos = bb_position(close)
     vol_ratio = volume_ratio(daily["volume"]).iloc[-1]
     iv_regime = classify_iv_regime(iv_rank)
+    weekly_rsi_val = rsi(weekly["close"]).iloc[-1]
 
     return SignalRead(
         date=daily.index[-1],
@@ -116,58 +128,85 @@ def build_signal_read(
         iv_rank=iv_rank,
         breakout_up=made_new_high(close),
         breakout_down=made_new_low(close),
+        weekly_rsi=float(weekly_rsi_val),
+        trend_strength=trend_strength(close),
     )
 
 
 # --- §4 strategy selection matrix -------------------------------------------------
-# Long calls/puts, debit spread put, credit spreads, and iron condor.
-# long_straddle stays excluded -- it was PROVEN to be a pricing artifact (a
-# real-data run showed 94% of total P&L / 68.6% win rate from our realized-
-# vol IV proxy underpricing straddles ahead of real historical earnings
-# jumps). Credit spreads/iron condor share the same IV-proxy risk in
-# principle but were never shown to be wrong the same way, so they're back
-# in -- still flagged, not fully trusted. debit_spread_call stays excluded
-# (confirmed worst performer on both real and synthetic data).
+# Exactly 3 structures, per user decision: long call, long put, and iron
+# condor -- iron condor kept specifically because it's had the highest win
+# rate of any structure in every run so far (72-79%). Dropped: debit spread
+# put and both credit spreads (not proven wrong, just cut for scope -- see
+# git history if reconsidering), and long_straddle (proven pricing
+# artifact: a real-data run showed 94% of total P&L / 68.6% win rate came
+# from our realized-vol IV proxy underpricing straddles ahead of real
+# historical earnings jumps).
+#
+# Directional entries (long call/put) require LOW IV, full stop -- with no
+# debit/credit spread left to route the high-IV case to, the alternative
+# would be buying rich premium in a high-IV regime with no structural edge
+# to compensate. Tried allowing that: blended win rate went DOWN despite
+# stricter entry filters, because it diluted the sample with structurally
+# worse high-IV entries. Skipping high-IV directional setups entirely
+# instead of forcing a worse trade.
 
 LONG_CALL = "long_call"
 LONG_PUT = "long_put"
-DEBIT_SPREAD_PUT = "debit_spread_put"
-CREDIT_SPREAD_BULL_PUT = "credit_spread_bull_put"
-CREDIT_SPREAD_BEAR_CALL = "credit_spread_bear_call"
 IRON_CONDOR = "iron_condor"
 NO_TRADE = None
 
 
 MIN_VOLUME_RATIO = 1.2  # strategy-rules.md §2: "confirming (>=1.2x avg)" -- was
                          # computed but never actually enforced until now.
+MIN_TREND_STRENGTH = 0.01  # EMA20/EMA50 must be >=1% apart -- a bare
+                            # crossover (classify_trend's own bar) can fire
+                            # on a trend that's barely formed.
 
 
 def select_structure(read: SignalRead) -> Optional[str]:
     """Maps a SignalRead to a structure per strategy-rules.md §4.
-    No trade unless trend + momentum + volume + a genuine breakout all
-    confirm a direction; the Bollinger Band check avoids buying calls right
-    at the top of a band (mean-reversion risk) or puts right at the bottom.
-    Range-bound + high IV + price at a band edge is a separate mean-
-    reversion setup (iron condor), not a directional one.
 
-    Thresholds here (RSI >=/<=50, min volume ratio, breakout confirmation)
-    are deliberately strict: at 0.12-delta OTM long options, a losing trade
-    is expected to be the common case (delta ~= probability of profit), so
-    the only lever to raise win rate without also raising cost/contract is
-    fewer, higher-conviction entries. Trades less often than earlier looser
-    versions -- that's the intended tradeoff, not a bug.
+    Multiple independent confirmations required for a directional entry,
+    not just one signal family:
+      1. Daily trend (EMA20/EMA50 crossover + slope)
+      2. Weekly trend (must agree with daily -- see combined_trend)
+      3. Trend strength (EMA separation >= MIN_TREND_STRENGTH, not just a
+         bare crossover)
+      4. Daily momentum (MACD histogram positive/rising + RSI >=/<=50)
+      5. Weekly momentum (weekly RSI agrees with the daily read)
+      6. Volume (>=1.2x the 20-day average)
+      7. Breakout (genuine new 10-day high/low within the last 3 sessions)
+      8. Bollinger Band guardrail (not entering against an overbought/
+         oversold extreme)
+      9. Low IV regime (no debit/credit spread left to absorb a high-IV
+         entry's richer premium, so high IV skips the trade entirely)
+    Losing any one of these blocks the trade -- deliberately strict, since
+    at 0.12-delta OTM long options a losing trade is the expected common
+    case (delta ~= probability of profit), so entry quality is the only
+    lever to raise win rate without also raising cost/contract.
+
+    Iron condor is a separate, range-bound/mean-reversion setup: high IV +
+    price at a Bollinger Band edge, no trend/momentum requirement (that's
+    the opposite of what the structure is for).
     """
 
     volume_confirms = read.volume_ratio >= MIN_VOLUME_RATIO
-    momentum_confirms_up = read.macd_hist > 0 and read.macd_rising and read.rsi >= 50
-    momentum_confirms_down = read.macd_hist < 0 and not read.macd_rising and read.rsi <= 50
+    momentum_confirms_up = (read.macd_hist > 0 and read.macd_rising
+                             and read.rsi >= 50 and read.weekly_rsi >= 50)
+    momentum_confirms_down = (read.macd_hist < 0 and not read.macd_rising
+                               and read.rsi <= 50 and read.weekly_rsi <= 50)
+    trend_strong_up = read.trend_strength >= MIN_TREND_STRENGTH
+    trend_strong_down = read.trend_strength <= -MIN_TREND_STRENGTH
 
     if (read.trend == TREND_UP and momentum_confirms_up and volume_confirms
-            and read.breakout_up and read.bb_position != BB_LOWER):
-        return LONG_CALL if read.iv_regime == "low" else CREDIT_SPREAD_BULL_PUT
+            and read.breakout_up and trend_strong_up and read.bb_position != BB_LOWER
+            and read.iv_regime == "low"):
+        return LONG_CALL
     if (read.trend == TREND_DOWN and momentum_confirms_down and volume_confirms
-            and read.breakout_down and read.bb_position != BB_UPPER):
-        return LONG_PUT if read.iv_regime == "low" else DEBIT_SPREAD_PUT
+            and read.breakout_down and trend_strong_down and read.bb_position != BB_UPPER
+            and read.iv_regime == "low"):
+        return LONG_PUT
 
     if (read.trend == TREND_RANGE and read.iv_regime == "high"
             and read.bb_position in (BB_UPPER, BB_LOWER)):

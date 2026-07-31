@@ -2,8 +2,6 @@ import numpy as np
 import pandas as pd
 
 from signals.engine import (
-    CREDIT_SPREAD_BULL_PUT,
-    DEBIT_SPREAD_PUT,
     IRON_CONDOR,
     LONG_CALL,
     LONG_PUT,
@@ -43,6 +41,7 @@ def _read(**overrides) -> SignalRead:
         date=pd.Timestamp("2024-01-01"), daily_trend=TREND_UP, weekly_trend=TREND_UP,
         trend=TREND_UP, rsi=55, macd_hist=1.0, macd_rising=True, bb_position="middle",
         volume_ratio=1.2, iv_regime="low", iv_rank=30, breakout_up=True, breakout_down=False,
+        weekly_rsi=55, trend_strength=0.02,
     )
     base.update(overrides)
     return SignalRead(**base)
@@ -50,29 +49,29 @@ def _read(**overrides) -> SignalRead:
 
 def _downtrend_overrides(**extra):
     base = dict(trend=TREND_DOWN, daily_trend=TREND_DOWN, weekly_trend=TREND_DOWN,
-                rsi=45, macd_hist=-1.0, macd_rising=False, breakout_up=False, breakout_down=True)
+                rsi=45, macd_hist=-1.0, macd_rising=False, breakout_up=False, breakout_down=True,
+                weekly_rsi=45, trend_strength=-0.02)
     base.update(extra)
     return base
 
 
-def test_select_structure_low_iv_uptrend_gives_long_call():
+def test_select_structure_uptrend_gives_long_call():
     r = _read()
     assert select_structure(r) == LONG_CALL
 
 
-def test_select_structure_high_iv_uptrend_gives_credit_spread_bull_put():
+def test_select_structure_high_iv_blocks_directional_entry():
+    # no debit/credit spread fallback anymore -- buying a long option in a
+    # high-IV regime means paying rich premium with no structural edge to
+    # compensate, so high IV skips the directional trade entirely rather
+    # than forcing a worse one.
     r = _read(iv_regime="high")
-    assert select_structure(r) == CREDIT_SPREAD_BULL_PUT
+    assert select_structure(r) is None
 
 
-def test_select_structure_low_iv_downtrend_gives_long_put():
+def test_select_structure_downtrend_gives_long_put():
     r = _read(**_downtrend_overrides())
     assert select_structure(r) == LONG_PUT
-
-
-def test_select_structure_high_iv_downtrend_gives_debit_spread_put():
-    r = _read(**_downtrend_overrides(iv_regime="high"))
-    assert select_structure(r) == DEBIT_SPREAD_PUT
 
 
 def test_select_structure_range_bound_low_iv_returns_none():
@@ -112,4 +111,19 @@ def test_select_structure_weak_rsi_blocks_entry():
 
 def test_select_structure_no_breakout_blocks_entry():
     r = _read(breakout_up=False)  # trend + momentum + volume confirm, but no fresh breakout
+    assert select_structure(r) is None
+
+
+def test_select_structure_weekly_rsi_disagreement_blocks_entry():
+    # daily momentum confirms bullish, but weekly RSI doesn't agree --
+    # multi-timeframe confirmation requirement (per user's "multiple
+    # analysis confirming trade" request)
+    r = _read(weekly_rsi=40)
+    assert select_structure(r) is None
+
+
+def test_select_structure_weak_trend_strength_blocks_entry():
+    # daily trend technically crosses (price > ema20 > ema50) but the EMAs
+    # are barely separated -- not a strong enough trend to trade
+    r = _read(trend_strength=0.002)
     assert select_structure(r) is None

@@ -71,3 +71,17 @@ def made_new_low(close: pd.Series, lookback: int = 10, within_last: int = 3) -> 
     low_idx = window.values.argmin()
     sessions_since_low = len(window) - 1 - low_idx
     return bool(close.iloc[-1] <= window.min() and sessions_since_low < within_last)
+
+
+def trend_strength(close: pd.Series, fast: int = 20, slow: int = 50) -> float:
+    """(EMA_fast - EMA_slow) / EMA_slow -- how separated the two EMAs are,
+    not just which side of each other they're on. classify_trend() only
+    checks a bare crossover (price > ema20 > ema50), which fires on a trend
+    that's barely formed; this measures how strong it actually is."""
+    if len(close) < slow:
+        return 0.0
+    e_fast = ema(close, fast).iloc[-1]
+    e_slow = ema(close, slow).iloc[-1]
+    if e_slow == 0:
+        return 0.0
+    return float((e_fast - e_slow) / e_slow)

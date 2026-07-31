@@ -10,21 +10,23 @@ backtest → paper trading → live trading.
   not %-of-equity — see §6 and `docs/strategy-rules.md` §5.
 - **Short-term only:** weekly (7–10 DTE) and bi-weekly (14–17 DTE) expirations —
   no 30–45 DTE "standard" tier (dropped from the original plan).
-- **Structures: long call, long put, debit put spread, credit spreads (bull
-  put/bear call), iron condor.** Long straddle was tried and dropped for
-  cause — a real-data backtest showed 94% of its P&L came from a 68.6% win
-  rate that traced back to an unvalidated IV-markup assumption, not real
-  edge. Credit spreads/iron condor share the same IV-proxy risk in
-  principle but were never individually proven wrong, so they're in scope —
-  still flagged, not fully trusted (see `docs/strategy-rules.md`).
-  `debit_spread_call` was also dropped: confirmed worst-performing structure
-  on both real and synthetic data.
-- Watchlist-driven scanning: evaluate each ticker once per day at/after close.
-- Signal generation from trend (daily/weekly EMA + breakout confirmation),
-  momentum (RSI, MACD, Bollinger Bands), volume, and volatility (IV rank/
-  percentile) — see `docs/strategy-rules.md` for the full spec.
-- Trade construction: strategy selected from a trend/momentum/breakout ×
-  IV-regime matrix.
+- **Structures: long call, long put, iron condor only** (per user decision —
+  scope was narrowed from a wider set that briefly included debit/credit
+  spreads and long straddle). Iron condor kept specifically for its
+  consistently high win rate (72-79% across runs). Long straddle stays
+  excluded for cause — a real-data backtest showed 94% of its P&L came from
+  a 68.6% win rate traced to an unvalidated IV-markup assumption, not real
+  edge. `debit_spread_call` was also dropped: confirmed worst-performing
+  structure on both real and synthetic data. See `docs/strategy-rules.md`
+  for the full scope history.
+- **Watchlist: AAPL, MSFT, GOOGL, AMZN, META, TSLA** (SPY/QQQ removed).
+- Signal generation from trend (daily/weekly EMA + trend-strength + breakout
+  confirmation), momentum (daily AND weekly RSI, MACD, Bollinger Bands),
+  volume, and volatility (IV rank/percentile) — see `docs/strategy-rules.md`
+  for the full spec.
+- Trade construction: long call/put fire only in the low-IV regime (no
+  spread structure left to absorb high-IV premium); iron condor fires only
+  in the high-IV, range-bound, band-edge case.
 - Risk management: target-cost position sizing (checked against actual
   spendable cash, not just total account value), profit-target/stop-loss/
   DTE-exit rules (separate thresholds for long-premium vs. credit
